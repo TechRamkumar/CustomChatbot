@@ -134,21 +134,20 @@ from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 from transformers import pipeline
-import torch
 import os
 
-# --- Force CPU device ---
-device = torch.device("cpu")
-embedder = SentenceTransformer("all-MiniLM-L6-v2", device=device)
+# --- Force CPU for embedding model ---
+embedder = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
 
-# --- Load QA model ---
+# --- Load QA model on CPU ---
 qa_model = pipeline(
     "text2text-generation",
     model="google/flan-t5-base",
-    device=-1,  # CPU
+    device=-1,  # CPU only
     trust_remote_code=True
 )
 
+# --- Load document from project folder ---
 PROJECT_DOC = "document.txt"
 if not os.path.exists(PROJECT_DOC):
     st.error(f"Document '{PROJECT_DOC}' not found in project folder.")
@@ -157,16 +156,17 @@ if not os.path.exists(PROJECT_DOC):
 with open(PROJECT_DOC, "r", encoding="utf-8") as f:
     doc_text = f.read()
 
-def chunk_text(text, chunk_size=100):
+# --- Function to split text into chunks ---
+def chunk_text(text: str, chunk_size: int = 100) -> list[str]:
     words = text.split()
     return [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
 
 chunks = chunk_text(doc_text, chunk_size=100)
 
-# --- Use Streamlit cache to store embeddings & FAISS index ---
+# --- Cache embeddings & FAISS index for faster reloads ---
 @st.cache_resource
-def create_index(chunks):
-    # Embed in batches to reduce memory spikes
+def create_faiss_index(chunks: list[str]):
+    # Batch embedding to reduce memory spikes
     batch_size = 64
     embeddings_list = []
     for i in range(0, len(chunks), batch_size):
@@ -181,10 +181,10 @@ def create_index(chunks):
     index.add(doc_embeddings)
     return index, doc_embeddings
 
-index, doc_embeddings = create_index(chunks)
+index, doc_embeddings = create_faiss_index(chunks)
 
 # --- Streamlit UI ---
-st.title("📘 Custom Chatbot (Document-Based)")
+st.title("📘 Custom Chatbot (Marketing Document-Based on Week 1 and Week 2)")
 st.write(f"Document loaded: **{PROJECT_DOC}**")
 
 question = st.text_input("Ask a question based on your document:")
