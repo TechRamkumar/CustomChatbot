@@ -136,14 +136,14 @@ import numpy as np
 from transformers import pipeline
 import os
 
-# --- Force CPU for embedding model ---
-embedder = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+# --- Load embedding model (auto-detect device, safe for Streamlit Cloud) ---
+embedder = SentenceTransformer("all-MiniLM-L6-v2")  # <-- remove device="cpu"
 
 # --- Load QA model on CPU ---
 qa_model = pipeline(
     "text2text-generation",
     model="google/flan-t5-base",
-    device=-1,  # CPU only
+    device=-1,  # CPU
     trust_remote_code=True
 )
 
@@ -156,17 +156,16 @@ if not os.path.exists(PROJECT_DOC):
 with open(PROJECT_DOC, "r", encoding="utf-8") as f:
     doc_text = f.read()
 
-# --- Function to split text into chunks ---
+# --- Split text into chunks ---
 def chunk_text(text: str, chunk_size: int = 100) -> list[str]:
     words = text.split()
     return [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
 
 chunks = chunk_text(doc_text, chunk_size=100)
 
-# --- Cache embeddings & FAISS index for faster reloads ---
+# --- Cache embeddings & FAISS index ---
 @st.cache_resource
 def create_faiss_index(chunks: list[str]):
-    # Batch embedding to reduce memory spikes
     batch_size = 64
     embeddings_list = []
     for i in range(0, len(chunks), batch_size):
@@ -184,7 +183,7 @@ def create_faiss_index(chunks: list[str]):
 index, doc_embeddings = create_faiss_index(chunks)
 
 # --- Streamlit UI ---
-st.title("📘 Custom Chatbot (Marketing Document-Based on Week 1 and Week 2)")
+st.title("📘 Custom Chatbot (Marketing Document-Based on Week1 and Week2)")
 st.write(f"Document loaded: **{PROJECT_DOC}**")
 
 question = st.text_input("Ask a question based on your document:")
