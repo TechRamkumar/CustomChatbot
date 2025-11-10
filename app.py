@@ -129,6 +129,8 @@
 #     prompt = f"Context: {context}\nQuestion: {question}\nAnswer:"
 #     answer = qa_model(prompt, max_length=150)[0]['generated_text']
 #     st.success(answer)
+
+
 import streamlit as st
 from transformers import AutoTokenizer, AutoModel, pipeline
 import faiss
@@ -136,19 +138,25 @@ import numpy as np
 import torch
 import os
 
-# --- Load tokenizer & model for embeddings ---
-tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
-model = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+# --- Load embedding model using HuggingFace (CPU-safe) ---
+@st.cache_resource
+def load_embedder():
+    tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+    model = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+    model.eval()
+    return tokenizer, model
 
+tokenizer, model = load_embedder()
+
+# --- Embedding function ---
 def embed_text(texts):
-    # Tokenize
     inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
     with torch.no_grad():
         outputs = model(**inputs)
         embeddings = outputs.last_hidden_state.mean(dim=1)  # mean pooling
         return embeddings.cpu().numpy()
 
-# --- Load QA model once ---
+# --- Load QA model ---
 @st.cache_resource
 def load_qa_model():
     return pipeline(
@@ -169,14 +177,14 @@ if not os.path.exists(PROJECT_DOC):
 with open(PROJECT_DOC, "r", encoding="utf-8") as f:
     doc_text = f.read()
 
-# --- Split into chunks ---
+# --- Chunk document ---
 def chunk_text(text, chunk_size=100):
     words = text.split()
-    return [" ".join(words[i:i+chunk_size]) for i in range(0, len(words), chunk_size)]
+    return [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
 
 chunks = chunk_text(doc_text)
 
-# --- Cache FAISS index & embeddings ---
+# --- FAISS index ---
 @st.cache_resource
 def create_faiss_index(chunks):
     batch_size = 64
@@ -186,7 +194,6 @@ def create_faiss_index(chunks):
         batch_embeddings = embed_text(batch_chunks)
         embeddings_list.append(batch_embeddings)
     doc_embeddings = np.vstack(embeddings_list).astype(np.float32)
-
     dim = doc_embeddings.shape[1]
     index = faiss.IndexFlatL2(dim)
     index.add(doc_embeddings)
@@ -195,21 +202,15 @@ def create_faiss_index(chunks):
 index, doc_embeddings = create_faiss_index(chunks)
 
 # --- Streamlit UI ---
-st.title("📘 Custom Chatbot (Marketing Document-Based on week 1 and week 2)")
+st.title("📘 Custom Chatbot (Safe for Streamlit Cloud)")
 st.write(f"Document loaded: **{PROJECT_DOC}**")
 
 question = st.text_input("Ask a question based on your document:")
 
 if st.button("Get Answer") and question.strip():
-    # Embed question once
     q_embedding = embed_text([question]).astype(np.float32)
-    
-    # Retrieve top 5 chunks
     D, I = index.search(q_embedding, 5)
     context = " ".join([chunks[i] for i in I[0]])
-
     prompt = f"Answer the question based on the context below.\n\nContext:\n{context}\n\nQuestion: {question}\nAnswer:"
-    
-    # Generate answer
     answer = qa_model(prompt, max_new_tokens=200)[0]['generated_text']
     st.success(answer)
