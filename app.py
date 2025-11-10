@@ -130,51 +130,63 @@
 #     answer = qa_model(prompt, max_length=150)[0]['generated_text']
 #     st.success(answer)
 import streamlit as st
-from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer, AutoModel, pipeline
 import faiss
 import numpy as np
-from transformers import pipeline
+import torch
 import os
 
-# --- Load embedding model (auto-detect device, safe for Streamlit Cloud) ---
-embedder = SentenceTransformer("all-MiniLM-L6-v2")  # <-- remove device="cpu"
+# --- Load tokenizer & model for embeddings ---
+tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+model = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
 
-# --- Load QA model on CPU ---
-qa_model = pipeline(
-    "text2text-generation",
-    model="google/flan-t5-base",
-    device=-1,  # CPU
-    trust_remote_code=True
-)
+def embed_text(texts):
+    # Tokenize
+    inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
+    with torch.no_grad():
+        outputs = model(**inputs)
+        embeddings = outputs.last_hidden_state.mean(dim=1)  # mean pooling
+        return embeddings.cpu().numpy()
 
-# --- Load document from project folder ---
+# --- Load QA model once ---
+@st.cache_resource
+def load_qa_model():
+    return pipeline(
+        "text2text-generation",
+        model="google/flan-t5-base",
+        device=-1,  # CPU
+        trust_remote_code=True
+    )
+
+qa_model = load_qa_model()
+
+# --- Load document ---
 PROJECT_DOC = "document.txt"
 if not os.path.exists(PROJECT_DOC):
-    st.error(f"Document '{PROJECT_DOC}' not found in project folder.")
+    st.error(f"Document '{PROJECT_DOC}' not found.")
     st.stop()
 
 with open(PROJECT_DOC, "r", encoding="utf-8") as f:
     doc_text = f.read()
 
-# --- Split text into chunks ---
-def chunk_text(text: str, chunk_size: int = 100) -> list[str]:
+# --- Split into chunks ---
+def chunk_text(text, chunk_size=100):
     words = text.split()
-    return [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
+    return [" ".join(words[i:i+chunk_size]) for i in range(0, len(words), chunk_size)]
 
-chunks = chunk_text(doc_text, chunk_size=100)
+chunks = chunk_text(doc_text)
 
-# --- Cache embeddings & FAISS index ---
+# --- Cache FAISS index & embeddings ---
 @st.cache_resource
-def create_faiss_index(chunks: list[str]):
+def create_faiss_index(chunks):
     batch_size = 64
     embeddings_list = []
     for i in range(0, len(chunks), batch_size):
-        batch_chunks = chunks[i:i + batch_size]
-        batch_embeddings = embedder.encode(batch_chunks)
+        batch_chunks = chunks[i:i+batch_size]
+        batch_embeddings = embed_text(batch_chunks)
         embeddings_list.append(batch_embeddings)
     doc_embeddings = np.vstack(embeddings_list).astype(np.float32)
 
-    # FAISS index
     dim = doc_embeddings.shape[1]
     index = faiss.IndexFlatL2(dim)
     index.add(doc_embeddings)
@@ -183,16 +195,21 @@ def create_faiss_index(chunks: list[str]):
 index, doc_embeddings = create_faiss_index(chunks)
 
 # --- Streamlit UI ---
-st.title("📘 Custom Chatbot (Marketing Document-Based on Week1 and Week2)")
+st.title("📘 Custom Chatbot (Marketing Document-Based on week 1 and week 2)")
 st.write(f"Document loaded: **{PROJECT_DOC}**")
 
 question = st.text_input("Ask a question based on your document:")
 
 if st.button("Get Answer") and question.strip():
-    q_embedding = embedder.encode([question]).astype(np.float32)
-    D, I = index.search(q_embedding, 5)  # top 5 chunks
+    # Embed question once
+    q_embedding = embed_text([question]).astype(np.float32)
+    
+    # Retrieve top 5 chunks
+    D, I = index.search(q_embedding, 5)
     context = " ".join([chunks[i] for i in I[0]])
 
     prompt = f"Answer the question based on the context below.\n\nContext:\n{context}\n\nQuestion: {question}\nAnswer:"
+    
+    # Generate answer
     answer = qa_model(prompt, max_new_tokens=200)[0]['generated_text']
     st.success(answer)
